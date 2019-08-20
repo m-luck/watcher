@@ -71,7 +71,7 @@ class Puller:
     def __call__(self):
         pass
 
-    def join_data(df, table: str, start: str, end: str) -> pd.DataFrame:
+    def join_data(self, api_key_path, df, table: str, start: str, end: str, tickers: List[str]) -> pd.DataFrame:
         """Joins data from Quandl tables to main dataframe.
 
         Args:
@@ -84,8 +84,11 @@ class Puller:
             New df with joined rows
         """
 
+        with open(api_key_path, 'r') as key:
+            quandl.ApiConfig.api_key = key.read()
         hashed_rows = {}
-        for ticker in config['tickers']:
+        for tic in tickers:
+            ticker = tic[0]
             print(table,'started:',ticker)
             temp_df = quandl.get(table+ticker, start_date=start, end_date=end)
             temp_df['ticker'] = ticker
@@ -103,7 +106,7 @@ class Puller:
             df[col] = np.nan if (col != 'ticker' and col != 'date') else df[col]
                         
         for i, row in df.iterrows(): # Now we are going through the base. O(n_of_base)
-            if i == 0: print('Joining', table, 'row',i,'to QOA data')
+            if i == 0: print('Joining', table, 'row',i,'to base data')
             if i % 100 == 0 and i != 0: print('---------------',i,'rows...')
             query_key = row['ticker']+str(row['date']).split(' ')[0]
             if query_key in hashed_rows:
@@ -111,7 +114,7 @@ class Puller:
                     if col != 'ticker' and col != 'date': 
                         val = hashed_rows[query_key][col]
                         df.at[i, col] = val
-        df.to_html(table+'plusQOA.html') # Save df to analyze.
+        df.to_html(table[:-1]+'plusBase.html') # Save df to analyze.
         print("Done joining",table,"to base.")
         
         return df
@@ -146,10 +149,47 @@ class Puller:
             print("Done loading SEP base.")
 
         if 'QOA' in data_sets:
-            df = join_data(df, 'QOA/', start, end)
+            df = self.join_data(api_key_path, df, 'QOA/', start, end, tickers)
 
-        if 'IFT/NSA':
-            df = join_data(df, 'IFT/NSA/', start, end)
+        if 'IFT/NSA' in data_sets:
+            # df = self.join_data(api_key_path, df, 'IFT/NSA/', start, end, tickers)
+            table = 'IFT/NSA'
+            hashed_sentiment_rows = {}
+            for tic in tickers: 
+                ticker = tic[0]
+                has_ticker = True
+                print('Sentiment started:', ticker)
+                for date in arrow.Arrow.span_range('day', arrow.get(start, 'YYYY-MM-DD'), arrow.get(end, 'YYYY-MM-DD')):
+                    if has_ticker is True:
+                        date_str = date[0].format('YYYY-MM-DD')
+                        try:
+                            temp_df = quandl.get_table(table, ticker=ticker, date=date_str).iloc[0]
+                            temp_df['ticker'] = ticker
+                            temp_df['date'] = temp_df.index
+                            # Save each row in a dictionary and also as a dictionary to reduce runtime when searching through SEP base once. With adequate RAM, this is reasonable.
+                            hash_key = temp_df['ticker']+str(temp_df['date']).split(' ')[0]
+                            row_dict = temp_df.to_dict()
+                            hashed_sentiment_rows[hash_key] = row_dict
+                        except:
+                            has_ticker = False
+                            print('Sentiment data does not have ticker', ticker)
+                if has_ticker is True:
+                    sentiment_columns = [sentiment_key for sentiment_key in hashed_sentiment_rows[hash_key]]
+                    sentiment_columns.sort()
+            # Make new columns for sentiment data.
+            for col in sentiment_columns:
+                if col != 'ticker' and col != 'date': df[col] = np.nan
+            for i, row in df.iterrows(): # Now we are going throught the base. O(n_base)
+                if i == 0: print('Joining Sentiment row',i,'to data')
+                if i % 100 == 0 and i != 0: print('---------------',i,'to data')
+                query_key = row['ticker']+str(row['date']).split(' ')[0]
+                if query_key in hashed_sentiment_rows:
+                    for col in sentiment_columns:
+                        if col != 'ticker' and col != 'date': 
+                            val = hashed_sentiment_rows[query_key][col]
+                            df.at[i, col] = val
+            df.to_html('SENTplusLOAD.html') # Save df to analyze.
+            print("Done joining payload to Sentiment Data.")
 
         return df
 
