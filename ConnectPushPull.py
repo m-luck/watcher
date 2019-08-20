@@ -1,20 +1,26 @@
-from typing import List, Dict
+# System Pkgs
 import ast
+import csv
 import time
+from typing import List, Dict
 
-from argparse import ArgumentParser
+# 3rd Party
 import arrow
 import numpy as np
 import pandas as pd
 import pyodbc
 import quandl
 import yaml
+from argparse import ArgumentParser
+from google.cloud import bigquery
+from google.oauth2 import service_account
 
+# App specific
 import LocalPrinter as lp
 
 class Connector:
 
-    def __init__(self, live, verbose):
+    def __init__(self):
         pass
 
     def __call__(self):
@@ -31,7 +37,7 @@ class Connector:
 
         """
 
-        cnxn = pypyodbc.connect('DRIVER={MySQL ODBC 5.3 ANSI Driver};'+sql_connection_options)
+        cnxn = pyodbc.connect('DRIVER={MySQL ODBC 5.3 ANSI Driver};'+sql_connection_options)
         server, uid, pwd, _, _ = sql_connection_options.split(';')
         server = server.split('=')[1]
         uid = uid.split('=')[1]
@@ -51,33 +57,32 @@ class Connector:
 
         """
 
-        with open(bqkey_path, 'r') as f:
-            bqkey = str(f.read())
-            
-        bq_client_live = get_client(json_key_file=config=bqkey, readonly=False) # Create BigQuery connection
+        credentials = service_account.Credentials.from_service_account_file(bqkey_path)
+
+        bq_client_live = bigquery.Client(credentials=credentials, project=bqid)
 
         return bq_client_live
         
 class Puller:
 
-    def __init__(self, live, verbose):
+    def __init__(self):
         pass
 
     def __call__(self):
         pass
 
     def join_data(df, table: str, start: str, end: str) -> pd.DataFrame:
-    """Joins data from Quandl tables to main dataframe.
+        """Joins data from Quandl tables to main dataframe.
 
-    Args:
-        df: main dataframe
-        table: table name with slash
-        start: Start date as string (YYMMDD)
-        end: End date as string
-    
-    Returns:
-        New df with joined rows
-    """
+        Args:
+            df: main dataframe
+            table: table name with slash
+            start: Start date as string (YYMMDD)
+            end: End date as string
+        
+        Returns:
+            New df with joined rows
+        """
 
         hashed_rows = {}
         for ticker in config['tickers']:
@@ -94,7 +99,8 @@ class Puller:
         table_columns.sort()
 
         # Make new columns for data (these NaN's will be filled in).
-        [df[col] = np.nan if col != 'ticker' and col != 'date' else df[col] for col in table_columns]
+        for col in table_columns:
+            df[col] = np.nan if (col != 'ticker' and col != 'date') else df[col]
                         
         for i, row in df.iterrows(): # Now we are going through the base. O(n_of_base)
             if i == 0: print('Joining', table, 'row',i,'to QOA data')
@@ -105,7 +111,7 @@ class Puller:
                     if col != 'ticker' and col != 'date': 
                         val = hashed_rows[query_key][col]
                         df.at[i, col] = val
-        if self.verbose: df.to_html(table+'plusQOA.html') # Save df to analyze.
+        df.to_html(table+'plusQOA.html') # Save df to analyze.
         print("Done joining",table,"to base.")
         
         return df
@@ -116,9 +122,8 @@ class Puller:
                         start: str, 
                         end: str, 
                         tickers_path: str, 
-                        data_sets: List(str), 
-                        api_key_path: str)
-                        -> pd.DataFrame:
+                        data_sets: List[str], 
+                        api_key_path: str) -> pd.DataFrame:
         """Pull data from Quandl API tables.
 
         Args:
@@ -129,12 +134,14 @@ class Puller:
         """
 
         # Connect to Quandl
-        quandl.ApiConfig.api_key = api_key_path.read()
-        tickers = tickers_path.read()
+        with open(tickers_path, 'r') as f, open(api_key_path, 'r') as key:
+            quandl.ApiConfig.api_key = key.read()
+            reader = csv.reader(f)
+            tickers = list(reader)
         
         if 'SHARADAR/SEP' in data_sets:
             table = 'SHARADAR/SEP/'
-            df = quandl.get_table(table, date = { 'gte': start, 'lte': end }, ticker=config['tickers'], paginate=True)
+            df = quandl.get_table(table, date = { 'gte': start, 'lte': end }, ticker=tickers, paginate=True)
             print(df.shape[0], 'rows of SEP returned by query.')
             print("Done loading SEP base.")
 
@@ -145,14 +152,11 @@ class Puller:
             df = join_data(df, 'IFT/NSA/', start, end)
 
         return df
-    
-    def pull_bq_data():
 
 class Pusher:
     
-    def __init__(self, live, verbose):
-        self.live = live
-        self.verbose = verbose
+    def __init__(self):
+        pass
 
     def __call__(self):
         pass
