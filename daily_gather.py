@@ -25,9 +25,9 @@ def initial_load():
 
     """
     stocks = puller.pull_quandl_data(
-                        '2014-01-01',
-                        '2014-01-03',
-                        'tickers_short.csv',
+                        '2016-01-02',
+                        '2016-01-04',
+                        'tickers.csv',
                         ['SHARADAR/SEP', 'QOA', 'IFT/NSA'],
                         'quandl.ignore')
     pusher.push_data_to_bq(
