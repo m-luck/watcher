@@ -126,7 +126,8 @@ class Puller:
                         end: str, 
                         tickers_path: str, 
                         data_sets: List[str], 
-                        api_key_path: str) -> pd.DataFrame:
+                        api_key_path: str,
+                        letter: str) -> pd.DataFrame:
         """Pull data from Quandl API tables.
 
         Args:
@@ -140,8 +141,16 @@ class Puller:
         with open(tickers_path, 'r') as f, open(api_key_path, 'r') as key:
             quandl.ApiConfig.api_key = key.read()
             reader = csv.reader(f)
-            tickers = list(reader)
-        
+            ogtickers = list(reader)
+
+        active = True
+        tickers = []
+        for tic in ogtickers:
+            # print('Testing',tic)
+            if tic[0][0] == letter:
+                # print('Pass!')
+                tickers.append(tic)
+
         if 'SHARADAR/SEP' in data_sets:
             table = 'SHARADAR/SEP/'
             df = quandl.get_table(table, date = { 'gte': start, 'lte': end }, ticker=tickers, paginate=True)
@@ -149,7 +158,41 @@ class Puller:
             print("Done loading SEP base.")
 
         if 'QOA' in data_sets:
-            df = self.join_data(api_key_path, df, 'QOA/', start, end, tickers)
+            # df = self.join_data(api_key_path, df, 'QOA/', start, end, tickers)
+            table = 'QOA/' 
+            hashed_rows = {}
+            for tic in tickers:
+                ticker = tic[0]
+                print(table,'started:',ticker,start,'-',end)
+                temp_df = quandl.get(table+ticker, start_date=start, end_date=end)
+                temp_df['ticker'] = ticker
+                temp_df['date'] = temp_df.index
+                # Save each row in a dictionary and also as a dictionary to reduce runtime when searching through SEP base once. With adequate RAM, this is reasonable.
+                hash_key = None
+                for i, row in temp_df.iterrows():
+                    hash_key = row['ticker']+str(row['date']).split(' ')[0]
+                    row_dict = row.to_dict()
+                    hashed_rows[hash_key] = row_dict
+            
+                if hash_key != None:
+                    table_columns = [table_key for table_key in hashed_rows[hash_key]]
+                    table_columns.sort()
+
+                    # Make new columns for data (these NaN's will be filled in).
+                    for col in table_columns:
+                        df[col] = np.nan if (col != 'ticker' and col != 'date') else df[col]
+                                
+            for i, row in df.iterrows(): # Now we are going through the base. O(n_of_base)
+                if i == 0: print('Joining', table, 'row',i,'to base data')
+                if i % 100 == 0 and i != 0: print('---------------',i,'rows...')
+                query_key = row['ticker']+str(row['date']).split(' ')[0]
+                if query_key in hashed_rows:
+                    for col in table_columns:
+                        if col != 'ticker' and col != 'date': 
+                            val = hashed_rows[query_key][col]
+                            df.at[i, col] = val
+            df.to_html(table[:-1]+'plusBase.html') # Save df to analyze.
+            print("Done joining",table,"to base.")
 
         if 'IFT/NSA' in data_sets:
             # df = self.join_data(api_key_path, df, 'IFT/NSA/', start, end, tickers)
@@ -176,9 +219,13 @@ class Puller:
                 if has_ticker is True:
                     sentiment_columns = [sentiment_key for sentiment_key in hashed_sentiment_rows[hash_key]]
                     sentiment_columns.sort()
+                else:
+                    if ticker == 'AAPL' or ticker =='GOOGL':
+                        break
             # Make new columns for sentiment data.
-            for col in sentiment_columns:
-                if col != 'ticker' and col != 'date': df[col] = np.nan
+            if has_ticker is True:
+                for col in sentiment_columns:
+                    if col != 'ticker' and col != 'date': df[col] = np.nan
             for i, row in df.iterrows(): # Now we are going throught the base. O(n_base)
                 if i == 0: print('Joining Sentiment row',i,'to data')
                 if i % 100 == 0 and i != 0: print('---------------',i,'to data')
@@ -220,4 +267,16 @@ class Pusher:
             ---
         """
 
-        data.to_gbq(bqschema+'.'+bqtable, bqid, if_exists=if_exists)
+        ####### 
+        # The Pandas Way
+        #######
+        data.to_gbq(bqschema+'.'+bqtable, bqid, 
+                    # reauth=True, 
+                    if_exists=if_exists)
+
+        ####### 
+        # The BQ Way
+        #######
+        # dataset_ref = client.dataset(bqschema)
+        # table_ref = dataset_ref.table(bqtable)
+        # client.load_table_from_dataframe(df, table_ref).result()
